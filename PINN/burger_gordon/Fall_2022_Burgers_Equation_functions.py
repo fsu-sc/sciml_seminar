@@ -13,17 +13,19 @@ from functools import partial
 device = "cuda" if torch.cuda.is_available() else "cpu"
 ##
 
+#----------------------------------------------------------------------
 def initial_condition(x) -> torch.Tensor:
+    #print("initial condition, x shape: ", x.shape)
     res = - torch.sin(np.pi * x).reshape(-1, 1)
     return res
 
+#----------------------------------------------------------------------
 def boundary_condition(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
     boundary_value = torch.zeros(x.size()).to(device)  # Here this is the only thing we need
     # In case we had something more complicated
-    # boundary_value[x == -1] = tensor([0]) # Value at x == -1
-    # boundary_value[x == 1] = tensor([0]) # Value at x == 1
     return boundary_value
 
+#----------------------------------------------------------------------
 class PINN(nn.Module):
     """Simple neural network accepting two features as input and returning a single output
 
@@ -49,10 +51,12 @@ class PINN(nn.Module):
             out = self.act(layer(out))
         return self.layer_out(out)
 
+#----------------------------------------------------------------------
 def U_call(U_nn: PINN, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
     """Compute the value of the approximate solution from the NN model"""
     return U_nn(x, t)
 
+#----------------------------------------------------------------------
 def df(output: torch.Tensor, input: torch.Tensor, order: int = 1) -> torch.Tensor:
     """Compute neural network derivative with respect to input features using PyTorch autograd engine"""
     df_value = output
@@ -77,23 +81,34 @@ def dfdx(U_nn: PINN, x: torch.Tensor, t: torch.Tensor, order: int = 1):
     f_value = U_call(U_nn, x, t)
     return df(f_value, x, order=order)
 
-def compute_loss( U_nn: PINN, x: torch.Tensor = None, t: torch.Tensor = None ) -> torch.float:
+#----------------------------------------------------------------------
+def compute_loss( NN: PINN, x: torch.Tensor = None, t: torch.Tensor = None ) -> torch.float:
     """Compute the full loss function as interior loss + boundary loss
 
     This custom loss function is fully defined with differentiable tensors therefore
     the .backward() method can be applied to it
     """
     # PDE residual
-    interior_loss = dfdt(U_nn, x, t, order=1) + U_call(U_nn, x, t) * dfdx(U_nn, x, t, order=1) - (0.01/np.pi)*dfdx(U_nn, x, t, order=2)
+    u = NN(x, t)  # NN is the neural network
+    dudt = dfdt(NN, x, t, order=1) 
+    dudx = dfdx(NN, x, t, order=1) 
+    du2dx2 = dfdx(NN, x, t, order=2)
+    interior_loss = dudt + u * dudx - (0.01/np.pi) * du2dx2
 
-    # Boundary conditions at the domain extrema
+    xx = tensor([0 if x > 0.5 else 1 for x in torch.rand(t.size())])
+    print("xx[:,1]: ", xx[:,1])
+    print("xx[:,5]: ", xx[:,5])
+    print("xx[1,:]: ", xx[1,:])
+    print("xx[5,:]: ", xx[5,:])
+
+    # Boundary conditions at the domain extrema,  x in [-1,1]
     x_boundary = tensor([0 if x > 0.5 else 1 for x in torch.rand(t.size())]).reshape(-1,1).to(device)
-    boundary_loss = U_call(U_nn, x_boundary, t) - boundary_condition(x_boundary, t)
+    boundary_loss = NN(x_boundary, t) - boundary_condition(x_boundary, t)
 
     # initial condition loss (this should be only when t = 0)
     f_initial = initial_condition(x)
     t_initial = torch.zeros_like(x)
-    initial_loss_f = U_call(U_nn, x, t_initial) - f_initial
+    initial_loss_f = NN(x, t_initial) - f_initial
 
     # obtain the final MSE loss by averaging each loss term and summing them up
     final_loss = \
@@ -103,10 +118,12 @@ def compute_loss( U_nn: PINN, x: torch.Tensor = None, t: torch.Tensor = None ) -
 
     return final_loss
 
+#----------------------------------------------------------------------
 def train_model(U_nn: PINN,
                 loss_fn: Callable,
                 learning_rate: int = 0.01,
                 max_epochs: int = 1_000, ) -> PINN:
+
     optimizer = torch.optim.Adam(U_nn.parameters(), lr=learning_rate)
 
     for epoch in range(max_epochs):
@@ -123,6 +140,7 @@ def train_model(U_nn: PINN,
             break
     return U_nn
 
+#----------------------------------------------------------------------
 def check_gradient(U_nn: PINN, x: torch.Tensor, t: torch.Tensor) -> bool:
     eps = 1e-4
 
@@ -148,6 +166,7 @@ def check_gradient(U_nn: PINN, x: torch.Tensor, t: torch.Tensor) -> bool:
 
     return is_matching_x and is_matching_t and is_matching_x2 and is_matching_t2
 
+#----------------------------------------------------------------------
 def plot_locations(ax, t_domain, x_domain, x, t, title="", add_boundary=True, s=5, **kwargs):
     n_t = len(t)
     n_x = len(x)
@@ -190,8 +209,6 @@ def plot_locations(ax, t_domain, x_domain, x, t, title="", add_boundary=True, s=
 
 #------------------------------------------------------------------
 def wrap_train_model(x_np, t_np, lr, max_epochs, device, **kwargs):
-    #dct = GlobDct()
-    print("wrap")
     x_raw = torch.tensor(x_np, requires_grad=True).to(device)
     t_raw = torch.tensor(t_np, requires_grad=True).to(device)
     grids = torch.meshgrid(x_raw, t_raw, indexing="ij")
@@ -208,7 +225,6 @@ def wrap_train_model(x_np, t_np, lr, max_epochs, device, **kwargs):
     U_nn_trained = train_model(
         U_nn, loss_fn=loss_fn, learning_rate=lr, max_epochs=max_epochs
     )
-    print(f"... {U_nn_trained=}")
     compute_loss(U_nn_trained, x=x_train, t=t_train)
     return U_nn_trained
     print("Done training!")
@@ -219,7 +235,7 @@ def evaluate_model(n_x_test, n_t_test, x_domain_test, t_domain_test,  device, **
     x_np = np.linspace(x_domain_test[0], x_domain_test[1], n_x_test, dtype=np.float32)
     t_np = np.linspace(t_domain_test[0], t_domain_test[1], n_t_test, dtype=np.float32)
     grids = torch.meshgrid(torch.tensor(x_np), torch.tensor(t_np), indexing="ij")
-    # Flatten and Send to CUDA
+    # Flatten and Send to device (CPU or CUDA)
     x_test = grids[0].flatten().reshape(-1, 1).to(device)
     t_test = grids[1].flatten().reshape(-1, 1).to(device)
     print("Done!")
@@ -233,6 +249,8 @@ def plot_domain(x_domain, t_domain, n_x, n_t, x_np, t_np, **kwargs):
 
 #------------------------------------------------------------------
 def plot_evaluation(x_domain_test, t_domain_test, U_nn_trained, n_x_test, n_t_test, device, **kwargs):
+    # Update a u2d in the global dictionary (which is not an argument)
+    #print(f"{n_x_test=}")
     x_np = np.linspace(x_domain_test[0], x_domain_test[1], n_x_test, dtype=np.float32)
     t_np = np.linspace(t_domain_test[0], t_domain_test[1], n_t_test, dtype=np.float32)
     grids = torch.meshgrid(torch.tensor(x_np), torch.tensor(t_np), indexing="ij")
@@ -244,6 +262,7 @@ def plot_evaluation(x_domain_test, t_domain_test, U_nn_trained, n_x_test, n_t_te
     u2d = U_nn_trained(x_test, t_test)
     u2d = u2d.to("cpu").detach().numpy()
     u2d = u2d.reshape(n_x_test, n_t_test)
+    print("u2d: ", u2d.shape)
     dct = GlobDct();
     dct.u2d = u2d
 
@@ -260,8 +279,12 @@ def plot_evaluation(x_domain_test, t_domain_test, U_nn_trained, n_x_test, n_t_te
 #------------------------------------------------------------------
 def plot_intermediate_values(x_domain, t_domain, x_np, t_np, u2d, **kwargs):
     ## --------- Intermediate values
-    #for i in range(0,99,10):
-    for i in range(0,49,10):
+    nx = x_np.shape[0]
+    nt = t_np.shape[0]
+    # plot 5 intermediate stages
+    step = (nx+1) // 5
+    print("nx,step: ", nx, step)
+    for i in range(0, nx, step):
         fig, axs = plt.subplots(2,1, figsize=(6,8), gridspec_kw={'height_ratios': [1, 5]})
         #print(f"{u2d.shape=}")
         #print(f"{x_np.shape=}")
@@ -276,29 +299,67 @@ def plot_intermediate_values(x_domain, t_domain, x_np, t_np, u2d, **kwargs):
         axs[1].set_ylabel("Time")
         axs[1].set_title("Trained model")
         axs[1].plot([-1,1],[t_np[i],t_np[i]], c="red")
-        plt.show()
-        t.sleep(.2)
+    #plt.show()
+    #t.sleep(.2)
     print("Done!")
+
+#------------------------------------------------------------------
+def plot_intermediate_values1(x_domain, t_domain, x_np, t_np, u2d, **kwargs):
+    ## --------- Intermediate values
+    nx = x_np.shape[0]
+    nt = t_np.shape[0]
+    # plot 5 intermediate stages
+    step = (nx+1) // 5
+    print("nx,step: ", nx, step)
+    fig, axs = plt.subplots(2,1, figsize=(12,16), gridspec_kw={'height_ratios': [3, 5]})
+    axs[1].imshow(np.flipud(np.transpose(u2d)), extent=(min(x_domain), max(x_domain),
+                            min(t_domain), max(t_domain)), cmap="inferno")
+    axs[1].set_aspect(3)
+    axs[1].set_xlabel("X")
+    axs[1].set_ylabel("Time")
+    axs[1].set_title("Trained model")
+    cols = ['r','g', 'blue', 'm', 'y']
+
+    for ix, i in enumerate(range(0, nx, step)):
+        print(f"{u2d.shape=}")
+        #print(f"{x_np.shape=}")
+        axs[0].plot(x_np, u2d[:,i], c=cols[ix])
+        axs[0].set_ylim([-2.0,2.0])
+        axs[0].set_title(F"Time {t_np[i]:0.2f}")
+        # Hardcoded!
+        axs[1].plot([-1,1],[t_np[i],t_np[i]], c=cols[ix], label=f"t={t_np[i]:0.2f}")
+    axs[1].legend()
+    #plt.show()
+    #t.sleep(.2)
+    print("Done!")
+
 #------------------------------------------------------------------
 def plot_extrapolated_solution(n_x_test, n_t_test, x_domain_test, t_domain_test, u2d, U_nn_trained, device, **kwargs):
     # Uniformly distributed
     x_np = np.linspace(x_domain_test[0], x_domain_test[1], n_x_test, dtype=np.float32)
     t_np = np.linspace(t_domain_test[0], t_domain_test[1], n_t_test, dtype=np.float32)
     grids = torch.meshgrid(torch.tensor(x_np), torch.tensor(t_np), indexing="ij")
-    # Flatten and Send to CUDA
+
+    # Flatten and Send to Device
     x_test = grids[0].flatten().reshape(-1, 1).to(device)
     t_test = grids[1].flatten().reshape(-1, 1).to(device)
 
-    print("Done!")
-
-    ##
+    # Prediction with the Neural Network
     u2d_outside = U_nn_trained(x_test, t_test)
+
     u2d_outside = u2d_outside.to("cpu").detach().numpy()
     u2d_outside = u2d_outside.reshape(n_x_test, n_t_test)
+
+    # Plot does not look right. I get expansion past t=1
+    # Concatenate previously computed solution with solution on new domain
     u2d_final = np.concatenate([u2d, u2d_outside], axis=1)
-    fig, axs = plt.subplots(2,1, figsize=(8,6), gridspec_kw={'height_ratios': [1, 5]})
+    fig, axs = plt.subplots(2,1, figsize=(16,12), gridspec_kw={'height_ratios': [1, 5]})
+
+    # Initial Condition
     axs[0].plot(x_np, initial_condition(torch.tensor(x_np)).to("cpu").detach().numpy())
     axs[0].set_title("Initial conditions")
+
+    # Solution on the test domain
     axs[1].imshow(np.flip(np.transpose(u2d_final)), extent=(min(x_domain_test), max(x_domain_test),
                             min(t_domain_test), max(t_domain_test)))
     axs[1].plot([-1,1], [1,1], c="red")

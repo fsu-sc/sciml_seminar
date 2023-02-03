@@ -17,6 +17,7 @@ class DictX(dict):
 
     def __repr__(self):
         return '<DictX ' + dict.__repr__(self) + '>'
+
 #----------------------------------------------------------------------
 class GlobDct(object):
     """ Singleton class to store global dictionary
