@@ -84,7 +84,7 @@ def compute_loss( U_nn: PINN, x: torch.Tensor = None, t: torch.Tensor = None ) -
     # PDE residual
     interior_loss = dfdt(U_nn, x, t, order=1) + U_call(U_nn, x, t) * dfdx(U_nn, x, t, order=1) - (0.01/np.pi)*dfdx(U_nn, x, t, order=2)
 
-    # Boundary conditions at the domain extrema
+    # Boundary conditions at the domain extrema $x \in [-1,1]$
     x_boundary = tensor([0 if x > 0.5 else 1 for x in torch.rand(t.size())]).reshape(-1,1).to(device)
     boundary_loss = U_call(U_nn, x_boundary, t) - boundary_condition(x_boundary, t)
 
